@@ -1,0 +1,22 @@
+Package: fastged
+Title: A Gene Expression Discretization Implementation
+Version: 0.0.0.9000
+Authors@R:
+    person(given = "Laura",
+           family = "Rumpf",
+           role = c("aut", "cre"),
+           email = "laura.rumpf@web.de")
+Description: This package contains an R script for gene expression
+        discretization with 2 classes (values 0,1) corresponding to expressed
+        and non-expressed genes respectively and 3 classes (values -1, 0, 1)
+        corresponding to non-expressed, normally expressed and highly expressed
+        genes.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.1.1
+Imports:
+    mclust (>= 5.4.7),
+    optparse (>= 1.6.6),
+    ggplot2 (>= 3.3.3)
