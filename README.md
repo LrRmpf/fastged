@@ -10,14 +10,6 @@ The goal of fastged is to provide a fast implementation for gene expression disc
 
 The gene expression discretization uses either binary classification (values 0,1) corresponding to expressed and non-expressed genes respectively or 3 classes (values -1, 0, 1) corresponding to non-expressed, normally expressed and highly expressed genes. The user can choose the option to apply deseq (across sample normalization) and tpm normalization before the discretization calculation.
 
-## Installation
-
-You can install the released version of fastged from GitHub with:
-
-``` r
-install_github("LrRmpf/fastged")
-```
-
 ## How to use?
 
 An input file containing a gene expression matrix (Rows: Gene IDs, Columns: Sample IDs) has to be specified in console command. The other arguments are optional. Run Rscript discretization.R with option -h to show all options:
