@@ -1,28 +1,459 @@
-#!/usr/bin/env Rscript
-
 suppressPackageStartupMessages(require(mclust))
 suppressPackageStartupMessages(require(optparse))
 suppressPackageStartupMessages(require(ggplot2))
+suppressPackageStartupMessages(require(EDASeq))
+suppressPackageStartupMessages(require(biomaRt))
+suppressPackageStartupMessages(require(DESeq2))
 
+# input
+read_input <- function(file){
+
+  file_name <- unlist(file)
+
+  if(strsplit(file_name, "\\.")[[1]][2] == "csv"){
+    read.csv(file, header = TRUE)
+  } else {
+    read.table(file, header = TRUE)
+  }
+
+
+}
+
+# Remove duplicate genes and set gene ids as row names
+remove_duplicates <- function(df){
+
+  if (is.character(df[1,1])){
+
+    #print("gene names in first column")
+    #print(df[1,1])
+    # filter gene id duplicates in count matrix: upper-/lowercase
+    df[,1] <- toupper(df[,1])
+    df <- df[df[,1] %in% names(which(table(df[,1]) < 2)), ]
+
+    rownames(df) <- df[,1]
+    df <- df[,-1]
+
+  }else{
+
+    #print("gene names as rownames")
+    df[,ncol(df)+1] <- toupper(rownames(df))
+    df <- df[df[,ncol(df)] %in% names(which(table(df[,ncol(df)]) < 2)), ]
+    rownames(df) <- toupper(rownames(df))
+    df <- df[,-(ncol(df))]
+
+
+
+  }
+
+
+}
+
+
+#' Gene lengths query function
+#'
+#' @description
+#' 'get_genelengths' takes an ASCII input file containing a count matrix of expression
+#' values with ensemble gene ids as rownames
+#'
+#' @param file (Path) input ASCII file containing count values (Columns=Samples, Rows=Genes)
+#' @return output file containing gene length vector that can be used in tpm normalization
+#'
+#' @export
+#'
+get_genelengths <- function(file, output, genomeflag){
+
+  print(genomeflag)
+
+  data <- read_input(file)
+
+  # log_file <- file("deleted_genes.log")
+
+  # get path of input file
+  target.directory <- dirname(normalizePath(file))
+
+  # create log file for removed genes in translation gene symbols -> ensemble ids
+  log_file <- file.path(target.directory, "deleted_genes.log")
+  cat("Removed Genes When Mapping Gene Symbols To Ensemble Id\n\n", file = log_file)
+
+  # set path for output file
+  if (is.na(output)){
+    output.folder <- target.directory
+  }
+
+  # get gene names
+
+  data <- remove_duplicates(data)
+
+  gene.names <- rownames(data)
+
+  #print("gene ids: ")
+  #print(gene.names)
+  #print("data without duplicates: ")
+  #print(head(data))
+
+ # human genome
+ if (genomeflag == 'h'){
+
+   print("get human gene lengths")
+
+   if(!mapply(grepl,'ensg', gene.names[1], ignore.case=TRUE)){
+   # if (!grepl('ens', gene.names[1])){
+
+     ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+     mart_res <- getBM(attributes=c("ensembl_gene_id","hgnc_symbol"),
+                       filters= "hgnc_symbol", values= gene.names, mart= ensembl)
+
+
+     # multiple ensemble ids for one gene symbol -> log entry
+     mult_ens <- unique(mart_res$hgnc_symbol[duplicated(mart_res$hgnc_symbol)])
+
+     print("multiple ensemble ids")
+     print(mult_ens)
+
+     for (entry in mult_ens){
+       cat(entry, ": more than one ensemble id for gene symbol\n", file = log_file, append = TRUE)
+
+     }
+
+     # multiple gene symbols get one ensemble id -> log entry -> obsolete?
+     mult_hgnc <- unique(mart_res$hgnc_symbol[duplicated(mart_res$ensembl_gene_id)])
+
+
+     for (entry in mult_hgnc){
+       cat(entry, ": same ensemble id for multiple gene symbols\n", file = log_file, append = TRUE)
+     }
+
+
+     #no ensemble id for gene symbol -> log entry
+     no_ens <- gene.names[which(!(toupper(gene.names) %in% toupper(mart_res$hgnc_symbol)))]
+
+     # print("gene symols with no ensemble ids")
+     # print(no_ens)
+
+     #if (length(no_ens) !=0){
+     for (entry in no_ens){
+       cat(entry, ": no ensemble id for gene symbol\n", file = log_file, append = TRUE)
+       # }
+     }
+
+     # keep only 1 to 1 mapping
+     reduced_mart <- mart_res[mart_res$ensembl_gene_id %in% names(which(table(mart_res$ensembl_gene_id) < 2)), ]
+     # obsolete?
+     reduced_mart2 <- reduced_mart[reduced_mart$hgnc_symbol %in% names(which(table(reduced_mart$hgnc_symbol) < 2)),]
+
+     #change rownames in counts to ensembl ids
+     data <- data[toupper(rownames(data)) %in% toupper(reduced_mart2$hgnc_symbol), ] #keep only genes with 1 to 1 mapping in count matrix
+
+     #create hashmap ensemble id -> gene symbol
+
+      print("creating hashmap gene symbol -> ensembl id")
+      keys <- toupper(reduced_mart2$hgnc_symbol) #reduced_mart2[,1]
+      H <- new.env(hash = TRUE, size = nrow(reduced_mart2))
+      for (i in 1:length(keys)) {
+       x <- toString(keys[i])
+       #print(i)
+       #print(x)
+       H[[x]] <- reduced_mart2[i,1]
+     }
+
+       #print("Hash: ")
+       #print(ls.str(H))
+
+     for (key in keys){
+       id <- toString(key)
+       rownames(data)[rownames(data) == id] <- toString(H[[id]])
+     }
+
+     info <- getGeneLengthAndGCContent(id=reduced_mart2$ensembl_gene_id , org="hsa")
+
+     # reduced_mart2[reduced_mart2$ensembl_gene_id %in% rownames(info),3] <- info[reduced_mart2$ensembl_gene_id %in% rownames(info),1]
+
+     # ensembl ids necessary for stitchIt
+     # lengths <- reduced_mart2[, ! names(reduced_mart2) %in% "ensembl_gene_id", drop = f]
+     lengths <- info[,-2,drop=F]
+
+   } else {
+
+     info <- getGeneLengthAndGCContent(id=gene.names , org="hsa")
+     lengths <- info[,-2,drop=F]
+     #lengths <- data.frame(gene.names)
+     #lengths[lengths$gene.names %in% rownames(info),2] <- info[lengths$gene.names %in% rownames(info),1]
+
+   }
+
+ } else if (genomeflag == 'mm') {
+
+    print("get mmusculus gene lengths")
+
+   if(!mapply(grepl,'ensmus', gene.names[1], ignore.case=TRUE)){
+
+      ensembl <- useEnsembl(biomart = "genes", dataset = "mmusculus_gene_ensembl")
+
+      #get ensemble ids
+      mart_res <- getBM(attributes=c("ensembl_gene_id","mgi_symbol"),
+                        filters= "mgi_symbol", values= gene.names, mart= ensembl)
+
+
+      # multiple ensemble ids for one gene symbol -> log entry
+      mult_ens <- unique(mart_res$mgi_symbol[duplicated(mart_res$mgi_symbol)])
+
+      print("multiple ensemble ids")
+      print(mult_ens)
+
+      #if (length(mult_ens) != 0){
+        for (entry in mult_ens){
+          cat(entry, ": more than one ensemble id for gene symbol\n", file = log_file, append = TRUE)
+
+        }
+
+      # multiple gene symbols get one ensemble id -> log entry -> obsolete?
+      mult_mgi <- mart_res$mgi_symbol[duplicated(mart_res$ensembl_gene_id)]
+
+
+        for (entry in mult_mgi){
+          cat(entry, ": same ensemble id for multiple gene symbols\n", file = log_file, append = TRUE)
+        }
+
+      #no ensemble id for gene symbol -> log entry
+      no_ens <- gene.names[which(!(toupper(gene.names) %in% toupper(mart_res$mgi_symbol)))]
+
+      # print("gene symols with no ensemble ids")
+      # print(no_ens)
+
+      #if (length(no_ens) !=0){
+        for (entry in no_ens){
+          cat(entry, ": no ensemble id for gene symbol\n", file = log_file, append = TRUE)
+       # }
+      }
+
+      # keep only 1 to 1 mapping
+      reduced_mart <- mart_res[mart_res$ensembl_gene_id %in% names(which(table(mart_res$ensembl_gene_id) < 2)), ]
+      reduced_mart2 <- reduced_mart[reduced_mart$mgi_symbol %in% names(which(table(reduced_mart$mgi_symbol) < 2)),]
+
+      # print(head(reduced_mart2))
+
+      #change rownames in counts to ensembl ids
+      data <- data[toupper(rownames(data)) %in% toupper(reduced_mart2$mgi_symbol), ] #keep only genes with 1 to 1 mapping in count matrix
+      #print(counts)
+
+        #create hashmap ensemble id -> gene symbol
+        keys <- toupper(reduced_mart2$mgi_symbol) #reduced_mart2[,1]
+        H <- new.env(hash = TRUE, size = nrow(reduced_mart2))
+        for (i in 1:length(keys)) {
+          x <- toString(keys[i])
+          #print(i)
+          #print(x)
+          H[[x]] <- reduced_mart2[i,1]
+        }
+
+        #print("Hash: ")
+        #print(ls.str(H))
+
+        for (key in keys){
+          id <- toString(key)
+          rownames(data)[rownames(data) == id] <- toString(H[[id]])
+        }
+
+      info <- getGeneLengthAndGCContent(id=reduced_mart2$ensembl_gene_id , org="mmusculus_gene_ensembl")
+
+      #reduced_mart2[reduced_mart2$ensembl_gene_id %in% rownames(info),3] <- info[reduced_mart2$ensembl_gene_id %in% rownames(info),1]
+
+      # only keep gene symbols
+      #lengths <- reduced_mart2[, ! names(reduced_mart2) %in% "ensembl_gene_id", drop = F]
+      lengths <- info[,-2,drop=F]
+
+    } else {
+
+      info <- getGeneLengthAndGCContent(id=gene.names , org="mmusculus_gene_ensembl")
+      lengths <- info[,-2,drop=F]
+      #lengths <- data.frame(gene.names)
+      #lengths[lengths$gene.names %in% rownames(info),2] <- info[lengths$gene.names %in% rownames(info),1]
+
+    }
+
+  } else if (genomeflag != 'h' & genomeflag != 'mm') {
+       stop("supported genome options -g for the gene lengths are human 'h' and mouse 'mm'")
+  }
+
+    #print("gene lengths: ")
+    #print(head(lengths))
+
+    #print("counts: ")
+    #print(head(data))
+
+  print("save normalized counts and gene lengths")
+
+  if(is.na(output)){
+    write.table(data, file=file.path(output.folder, "ensembl_counts.txt"), sep = "\t", quote = FALSE, row.names=TRUE, col.names=TRUE)
+    write.table(lengths, file=file.path(output.folder, "gene_lengths.txt"), sep = "\t", quote = FALSE, row.names=TRUE, col.names=TRUE)
+    gl <- file.path(output.folder, "gene_lengths.txt")
+    c <- file.path(output.folder, "ensembl_counts.txt")
+    glList <- list("infile" = c, "outfile" = gl)
+    return(glList)
+  }else{
+    out <- dirname(normalizePath(output))
+    write.table(data, file=file.path(out, "ensembl_counts.txt"), sep = "\t", quote = FALSE, row.names=TRUE, col.names=TRUE)
+    write.table(lengths, file=output, row.names=TRUE, sep = "\t", quote = FALSE, col.names=TRUE)
+    gl <- output
+    c <- file.path(out, "ensembl_counts.txt")
+    glList <- list("infile" = c, "outfile" = gl)
+    return(glList)
+  }
+
+
+
+}
+
+#' Normalize function
+#'
+#' @description
+#' 'normalize' takes an ASCII input file containing a count matrix of expression values and a vector of the same length
+#' containing the corresponding gene lengths and returns an output file with the DeSeq2 and TPM normalized values
+#'
+#' @param file (Path) input ASCII file containing count values (Columns=Samples, Rows=Genes)
+#' @param lenvector file containing the gene names and corresponding lengths
+#' @param output.norm
+#' @return output file containing a DESeq and TPM normalized value for every count value of the input file
+#'
+#' @export
+#'
+normalize <- function(file, lenvector, output){
+
+  print("normalizing ...")
+
+  # get path of input file
+  target.directory <- dirname(normalizePath(file))
+
+  # set path for output file
+  if (is.na(output)){
+    output.folder <- target.directory
+  }
+
+  # read input files
+
+  count.table <- read_input(file)
+
+  # print(head(count.table))
+
+  count.table <- remove_duplicates(count.table)
+
+  # print(head(count.table))
+
+  length.table <- read.table(lenvector, header = TRUE)
+
+  #length.table <- remove_duplicates(length.table)
+
+  #if (is.character(length.table[1,1])){
+  #  rownames(length.table) <- toupper(length.table[,1])
+  #  length.table <- length.table[,-1] #length vector
+  #}else{
+  #  rownames(length.table) <- toupper(rownames(length.table))
+  #}
+
+  if(!(mapply(grepl,'ens', rownames(count.table), ignore.case=TRUE)
+       && mapply(grepl,'ens', rownames(length.table), ignore.case=TRUE))){
+    warning("count matrix and length vector have to contain ensembl ids as gene names (rownames) when used for stitchit input!")
+  }
+
+
+  # not transformed ensembl ids: keep only genes with existing length value
+  count.table <- count.table[rownames(count.table) %in% rownames(length.table),]
+
+  print("first step: normalize across samples using DEseq")
+
+  ##############################################################################
+  # first step: DEseq2 for normalization across samples
+  ##############################################################################
+
+  # create dummy meta df as only normalized count matrix is needed
+  # rownames in same order as colnames count matrix
+  # dummy value: celltypes (-> not used for creating normalized count matrix)
+  sample.num <- ncol(count.table)
+  meta.df <- data.frame(matrix(NA, nrow = sample.num, ncol = 1))
+  rownames(meta.df) <- colnames(count.table)
+  colnames(meta.df) <- "celltypes"
+  meta.df[,1] <- rownames(meta.df)
+
+  dds <- DESeqDataSetFromMatrix(countData = round(count.table), colData = meta.df, design = ~ celltypes)
+  dds <- estimateSizeFactors(dds)
+  #sizeFactors(dds)
+  normalized_counts <- counts(dds, normalized=TRUE)
+
+  counts <- as.matrix(normalized_counts)
+
+  print("second step: tpm normalization")
+
+  ##############################################################################
+  #second step: tpm normalization
+  ##############################################################################
+
+  # create hash table for gene lengths
+
+  keys <- rownames(length.table)
+
+  H <- new.env(hash = TRUE, size = nrow(length.table))
+
+  vapply(keys, function(x) {
+    H[[x]] <- length.table[x,1]/1000 #kilobases
+    # print(x)
+    # print(length.table[x,2])
+    logical(0)
+  }, FUN.VALUE = logical(0))
+
+  # print(all.equal(sort(names(H)), keys))
+  # print(ls.str(H))
+
+
+  # check if all genes from input file are in hash table
+  g <- row.names(normalized_counts)
+  if(!all(g %in% names(H))){
+    stop("Every gene in the count matrix must have a specified length")
+
+  }
+
+  rpk <- t(sapply(1:nrow(counts), function(i) {
+     counts[i,]/H[[rownames(normalized_counts)[i]]]
+   }))
+
+  # normalize for sequencing depth
+  tpm <- apply(rpk, MARGIN = 2, function(x) {x/sum(as.numeric(x)) * 10^6})
+
+  #print("tpm values: ")
+  #print(head(tpm))
+
+  rownames(tpm) <- rownames(normalized_counts)
+
+  if(is.na(output)){
+    write.table(tpm, file=file.path(output.folder, "tpm.txt"), sep = "\t", row.names=TRUE, col.names=TRUE)
+    return(file.path(output.folder, "tpm.txt"))
+  }else{
+    write.table(tpm, file=output, sep = "\t", row.names=TRUE, col.names=TRUE)
+    return(output)
+  }
+
+}
 
 #' Discretize function
 #'
 #' @description
-#' 'discretize' takes an .txt input file containing a matrix of fpkm values and returns an output file with
-#' the discretized values (either classes 0,1 or -1,0,1)
+#' 'discretize' takes an ASCII input file containing a matrix of normalized
+#' gene expression values and returns an output file with the discretized values (either classes 0,1 or -1,0,1)
 #'
-#' @param file (Path) input .txt file containing fpkm values (Columns=Samples, Rows=Genes)
+#' @param file (Path) input ASCII file containing normalized gene expression values (Columns=Samples, Rows=Genes)
 #' @param figflag Binary parameter for plotting (TRUE = plot output)
 #' @param binaryflag Binary parameter for binary discretization (TRUE = 0,1 classes)
 #' @param output (Path) name output file
-#' @return output file containing a discrete value for every fpkm value of the input file (0,1 values for binaryflag = TRUE, else -1,0,1)
+#' @return output file containing a discrete value for every value of the input file (0,1 values for binaryflag = TRUE, else -1,0,1)
 #'
 #' @export
 #'
 discretize <- function(file, figflag, binaryflag, output){
 
+  print("discretizing ...")
+
  # read input file
- data <- read.table(file, header = TRUE)
+ data <- read_input(file) #read.table(file, header = TRUE)
 
  # path settings for output files
 
@@ -41,17 +472,16 @@ discretize <- function(file, figflag, binaryflag, output){
      }
    }
 
-   # set path for output .txt file
+   # set path for output file
    if (is.na(output)){
 
-    output.folder <- file.path(target.directory, "DGE") # folder name for plot outputs
+    output.folder <- file.path(target.directory, "DGE") # folder name for discretized matrix
 
     if (!file.exists(output.folder)){
       dir.create(output.folder, showWarnings = TRUE)
      }
    }
 
-   # fpkm values without headers
    fpkm <- as.matrix(data)
 
    signal <- log2(fpkm)  # log-transform the fpkm values
@@ -69,7 +499,7 @@ discretize <- function(file, figflag, binaryflag, output){
 
   signal.sample <- signal[,j]  # save current sample for density estimation
   data.keep <- signal[,j]  # all values of current sample for discretization
-  signal.sample <- signal.sample[signal.sample > -10000]  # remove sample values with low expression for plotting
+  signal.sample <- signal.sample[signal.sample > -10000]  # remove sample values with low expression
 
   # signal density estimation
   est <- density(signal.sample, bw = "nrd0", adjust = 1, kernel="gaussian", n = 100)
@@ -83,7 +513,7 @@ discretize <- function(file, figflag, binaryflag, output){
    p <- ggplot2::ggplot(est.df, mapping = aes(x=est$x, y=est$y))
    p <- p + geom_line(aes(y=est$y, color = "signal", linetype = "signal"), size = 1.2)
    p <- p + labs(title=paste("Density Plot for Sample:", colnames(signal)[j]),
-                x ="log2(FPKM)", y = "density")
+                x ="log2(tpm)", y = "density")
 
   }
 
@@ -232,11 +662,11 @@ discretize <- function(file, figflag, binaryflag, output){
 
  }
 
-  cat("Save output file...")
+  print("Save output file...")
   if(is.na(output)){
-    write.table(discretized.keep, file=file.path(output.folder, "dge.txt"), row.names=TRUE, col.names=TRUE)
+    write.table(discretized.keep, file=file.path(output.folder, "dge.txt"), sep = "\t", quote = FALSE, row.names=TRUE, col.names=TRUE)
   }else{
-    write.table(discretized.keep, file=output, row.names=TRUE, col.names=TRUE)
+    write.table(discretized.keep, file=output,  quote = FALSE, sep = "\t", row.names=TRUE, col.names=TRUE)
   }
 
 }
@@ -249,11 +679,29 @@ main <- function() {
 
   option_list <- list(
     make_option(c("-f", "--file"),
-                type="character",
-                dest="filename",
-                default=NULL,
-                help="dataset file name",
+                type ="character",
+                dest ="filename",
+                default = NULL,
+                help = "dataset file name",
+                metavar = "character"),
+   make_option(c("-n", "--normalize"),
+                dest="normflag",
+                default = FALSE,
+                action = "store_true",
+                help = "Should the expression data be TPM normalized first? [default %default]",
                 metavar="character"),
+   make_option(c("-g", "--genome"),
+               dest="genomeflag",
+               type = "character",
+               default = 'h',
+               help = "Options 'h' for Hsapiens, 'mm' for Mmusculus genome when no gene length file is provided for TPM normalisation. [default %default]",
+               metavar="character"),
+   make_option(c("-v", "--vector"),
+               type ="character",
+               dest ="lenvector",
+               default = NULL,
+               help = "gene length file name",
+               metavar = "character"),
     make_option(c("-p", "--plot"),
                 dest = "figflag" ,
                 default = FALSE,
@@ -270,8 +718,20 @@ main <- function() {
                 type="character",
                 dest = "output",
                 default=NA,
-                help="output file name [default= %default]",
-                metavar="character")
+                help="output file name discretization [default= %default]",
+                metavar="character"),
+   make_option(c("-t", "--tpmout"),
+               type="character",
+               dest = "output.norm",
+               default=NA,
+               help="output file name normalization [default= %default]",
+               metavar="character"),
+   make_option(c("-l", "--lout"),
+               type="character",
+               dest = "output.len",
+               default=NA,
+               help="output file name gene lengths [default= %default]",
+               metavar="character")
   )
 
 
@@ -284,7 +744,41 @@ main <- function() {
     stop("The argument 'input file' needs to be supplied", call.=FALSE)
   }
 
-  discretize(opt$filename, opt$figflag, opt$binaryflag, opt$output)
+  if (opt$normflag){
+
+    if (is.null(opt$lenvector)){
+
+        #if(is.null(opt$genomeflag)){
+        #
+        # print_help(opt_parser)
+        #  stop("The argument 'genomeflag' -g needs to be supplied for the gene length query", call.=FALSE)
+        #
+        #}
+
+      gl <- get_genelengths(opt$filename, opt$output.len, opt$genomeflag)
+      norm <- normalize(gl[[1]], gl[[2]], opt$output.norm)
+
+      discretize(norm, opt$figflag, opt$binaryflag, opt$output)
+
+      #discretize(normalize(opt$filename, get_genelengths(opt$filename, opt$output.len, opt$genomeflag),
+      #                     opt$output.norm), opt$figflag, opt$binaryflag, opt$output)
+
+      #discretize(normalize(opt$filename, get_genelengths(opt$filename, opt$output.len),
+      #                     opt$output.norm), opt$figflag, opt$binaryflag, opt$output)
+
+    # print_help(opt_parser)
+    # stop("The argument 'gene length file' needs to be supplied for the normalization step", call.=FALSE)
+     } else {
+
+    # normalize(opt$filename, opt$lenvector, opt$output.norm)
+     discretize(normalize(opt$filename, opt$lenvector, opt$output.norm), opt$figflag, opt$binaryflag, opt$output)
+     }
+
+  } else {
+
+     discretize(opt$filename, opt$figflag, opt$binaryflag, opt$output)
+  }
+
 
 }
 
