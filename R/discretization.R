@@ -259,7 +259,7 @@ get_genelengths <- function(file, output, genomeflag){
 
       #reduced_mart2[reduced_mart2$ensembl_gene_id %in% rownames(info),3] <- info[reduced_mart2$ensembl_gene_id %in% rownames(info),1]
 
-      # only keep gene symbols
+      # only keep ensembl ids
       #lengths <- reduced_mart2[, ! names(reduced_mart2) %in% "ensembl_gene_id", drop = F]
       lengths <- info[,-2,drop=F]
 
@@ -482,12 +482,12 @@ discretize <- function(file, figflag, binaryflag, output){
      }
    }
 
-   fpkm <- as.matrix(data)
+   tpm.counts <- as.matrix(data)
 
-   signal <- log2(fpkm)  # log-transform the fpkm values
+   signal <- log2(tpm.counts)  # log-transform the tpm values
    signal[is.infinite(signal)] = -10000  # transform all -inf to -10000
 
-   discretized.keep <- matrix(nrow = nrow(fpkm), ncol = ncol(fpkm))
+   discretized.keep <- matrix(nrow = nrow(tpm.counts), ncol = ncol(tpm.counts))
    rownames(discretized.keep) <- rownames(data)
    colnames(discretized.keep) <- colnames(data)
 
@@ -610,7 +610,7 @@ discretize <- function(file, figflag, binaryflag, output){
      normal.exp <- which(data.keep > inexpression.treshold & data.keep < expression.treshold)
     }
 
-    # log2(fpkm) values to discrete values
+    # log2(tpm) values to discrete values
     if(binaryflag){
       data.keep[activated.exp] <- 1
       data.keep[not.exp] <- 0
