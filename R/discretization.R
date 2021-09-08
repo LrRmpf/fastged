@@ -374,6 +374,9 @@ normalize <- function(file, lenvector, output){
   rownames(meta.df) <- colnames(count.table)
   colnames(meta.df) <- "celltypes"
   meta.df[,1] <- rownames(meta.df)
+  
+  # integer vals needed for DEseq -> round -> >0 should not be rounded to 0  
+  count.table[(count.table < 0.5) & (count.table > 0)] <- 1
 
   dds <- DESeqDataSetFromMatrix(countData = round(count.table), colData = meta.df, design = ~ celltypes)
   dds <- estimateSizeFactors(dds)
