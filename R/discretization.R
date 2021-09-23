@@ -11,9 +11,9 @@ read_input <- function(file){
   file_name <- unlist(file)
 
   if(strsplit(file_name, "\\.")[[1]][2] == "csv"){
-    read.csv(file, header = TRUE)
+    read.csv(file, header = TRUE, check.names=FALSE)
   } else {
-    read.table(file, header = TRUE)
+    read.table(file, header = TRUE, check.names=FALSE)
   }
 
 
