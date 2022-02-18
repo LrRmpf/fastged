@@ -431,7 +431,7 @@ normalize <- function(file, lenvector, output){
     write.table(tpm, file=file.path(output.folder, "tpm.txt"), sep = "\t", row.names=TRUE, col.names=TRUE)
     return(file.path(output.folder, "tpm.txt"))
   }else{
-    write.table(tpm, file=output, sep = "\t", row.names=TRUE, col.names=TRUE)
+    write.table(tpm, file=output, sep = "\t", quote = FALSE, row.names=TRUE, col.names=TRUE)
     return(output)
   }
 
